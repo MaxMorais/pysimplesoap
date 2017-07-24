@@ -34,15 +34,17 @@ def cache(func):
 
 @cache
 def parse(wsdl_path, wsdl_basedir=''):
-    logger.debug('Parsing wsdl path: %s' % wsdl_path)
+    #logger.debug('Parsing wsdl path: %s' % wsdl_path)
     # always return an unicode object:
     REVERSE_TYPE_MAP['string'] = str
 
     # TODO: extract "fetch_wsdl" function
     # Open uri and read xml:
     if isinstance(wsdl_path, (str, unicode)): # raw string
-        _, netloc, path, _, _ = urlsplit(wsdl_path)
+        disk, netloc, path, _, _ = urlsplit(wsdl_path)
         wsdl_basedir = os.path.dirname(netloc + path)
+        if os.name == 'nt':
+            wsdl_basedir = disk + ":" + wsdl_basedir
         xml = fetch(wsdl_path, wsdl_basedir)
     else: # file object or stringio
         xml = wsdl_path.read()
@@ -79,13 +81,12 @@ def _merge_imported_wsdl(wsdl, wsdl_basedir):
             wsdl_namespace = element['namespace']
             wsdl_location = element['location']
             if wsdl_location is None:
-                logger.warning('WSDL location not provided for %s!' % wsdl_namespace)
+                #logger.warning('WSDL location not provided for %s!' % wsdl_namespace)
                 continue
             if wsdl_location in imported_wsdls:
-                logger.warning('WSDL %s already imported!' % wsdl_location)
+                #logger.warning('WSDL %s already imported!' % wsdl_location)
                 continue
             imported_wsdls[wsdl_location] = wsdl_namespace
-            logger.debug('Importing wsdl %s from %s' % (wsdl_namespace, wsdl_location))
             # Open uri and read xml:
             xml = fetch(wsdl_location, wsdl_basedir)
             # Parse imported XML schema (recursively):

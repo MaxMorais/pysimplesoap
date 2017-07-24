@@ -19,7 +19,6 @@ if sys.version > '3':
 
 import logging
 import os
-import tempfile
 import requests
 
 from .simplexml import SimpleXMLElement
@@ -30,15 +29,27 @@ from .env import SOAP_NAMESPACES
 from .env import TIMEOUT
 from .api import decode
 from .wsdl import parse
+from requests.adapters import HTTPAdapter
+from requests.packages.urllib3.poolmanager import PoolManager
 
 log = logging.getLogger(__name__)
 
+class MyAdapter(HTTPAdapter):
+    def init_poolmanager(self, connections, maxsize, block=False):
+        self._pool_connections = connections
+        self._pool_maxsize = maxsize
+        self._pool_block = block
+
+        self.poolmanager = PoolManager(num_pools=connections,
+                                       maxsize=maxsize,
+                                       block=block,
+                                       assert_hostname=False)
 
 class SoapClient(object):
     """Simple SOAP Client (simil PHP)"""
     def __init__(self, location=None, action=None, namespace='',
                  cert=None, proxy=None, ns=None,
-                 soap_ns=None, wsdl=None, wsdl_basedir='', cacert=None,
+                 soap_ns=None, wsdl=None, wsdl_basedir='', ca_certs=None,
                  sessions=False, soap_server=None, timeout=TIMEOUT,
                  http_headers=None, username=None, password=None,
                  key_file=None, **kwds):
@@ -71,19 +82,12 @@ class SoapClient(object):
         self.__headers = {}         # general headers
         self.__call_headers = None  # Struct to be marshalled for RPC Call
 
-        # check if the Certification Authority Cert is a string and store it
-        if cacert and cacert.startswith('-----BEGIN CERTIFICATE-----'):
-            fd, filename = tempfile.mkstemp()
-            log.debug("Saving CA certificate to %s" % filename)
-            with os.fdopen(fd, 'w+b', -1) as f:
-                f.write(cacert)
-            cacert = filename
-        self.cacert = cacert
-
         # Create HTTP wrapper
         self.http = requests.session()
         if username and password:
             self.http.auth = (username, password)
+        if ca_certs:
+            self.http.verify = ca_certs
         if cert and key_file:
             self.http.cert = (key_file, cert)
 
@@ -107,12 +111,14 @@ class SoapClient(object):
 <%(soap_ns)s:Body><%(ns)s:%(method)s></%(ns)s:%(method)s></%(soap_ns)s:Body></%(soap_ns)s:Envelope>"""
 
         # parse wsdl url
-        log.debug('wsdl: %s' % wsdl)
+        #log.debug('wsdl: %s' % wsdl)
         self.services = wsdl and self.wsdl_parse(wsdl, self.wsdl_basedir)
         self.service_port = None                 # service port for late binding
 
     def __getattr__(self, attr):
         """Return a pseudo-method that can be called"""
+        if attr.startswith('_'):
+            raise AttributeError
         if self.services: # using WSDL:
             return lambda *args, **kwargs: self.wsdl_call(attr, *args, **kwargs)
         else: # not using WSDL?
@@ -211,9 +217,9 @@ class SoapClient(object):
             headers['SOAPAction'] = soap_action
 
         headers.update(self.http_headers)
-        log.info("POST %s" % self.location)
-        log.debug('\n'.join(["%s: %s" % (k, v) for k, v in headers.iteritems()]))
-        log.debug(xml)
+        #log.info("POST %s" % self.location)
+        #log.debug('\n'.join(["%s: %s" % (k, v) for k, v in headers.iteritems()]))
+        #log.debug(xml)
 
         if sys.version < '3':
             # Ensure http_method, location and all headers are binary to prevent
@@ -222,10 +228,13 @@ class SoapClient(object):
             # httplib in python3 do the same inside itself, don't need to convert it here
             headers = dict((str(k), str(v)) for k, v in headers.iteritems())
 
+        if self.http.verify:
+            self.http.mount('https://', MyAdapter())
+
         resp = self.http.post(self.location, data=xml, headers=headers)
 
-        log.debug('\n'.join(["%s: %s" % (k, v) for k, v in resp.headers.iteritems()]))
-        log.debug(resp.content)
+        #log.debug('\n'.join(["%s: %s" % (k, v) for k, v in resp.headers.iteritems()]))
+        #log.debug(resp.content)
         return (resp.headers, resp.content)
 
     def get_operation(self, method):
@@ -423,9 +432,6 @@ class SoapClient(object):
     def close(self):
         """Finish the connection and remove temp files"""
         self.http.close()
-        if self.cacert.startswith(tempfile.gettempdir()):
-            log.debug('removing %s' % self.cacert)
-            os.unlink(self.cacert)
 
     def __repr__(self):
         s = 'SOAP CLIENT'

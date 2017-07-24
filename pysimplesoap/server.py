@@ -24,7 +24,6 @@ import sys
 import logging
 import warnings
 import re
-import traceback
 try:
     from BaseHTTPServer import BaseHTTPRequestHandler, HTTPServer
 except ImportError:
@@ -134,84 +133,32 @@ class SoapDispatcher(object):
         if fault is None:
             fault = {}
         soap_ns, soap_uri = self.soap_ns, self.soap_uri
-        soap_fault_code = 'VersionMismatch'
         name = None
 
         _ns_reversed = dict(((v, k) for k, v in self.namespaces.items()))  # Switch keys-values
 
-        try:
-            request = SimpleXMLElement(xml, namespace=self.namespace, headers=headers)
+        request = SimpleXMLElement(xml, namespace=self.namespace, headers=headers)
 
-            # detect soap prefix and uri (xmlns attributes of Envelope)
-            for k, v in request[:]:
-                if v in ("http://schemas.xmlsoap.org/soap/envelope/",
-                         "http://www.w3.org/2003/05/soap-env",
-                         "http://www.w3.org/2003/05/soap-envelope",):
-                    soap_ns = request.attributes()[k].localName
-                    soap_uri = request.attributes()[k].value
+        # detect soap prefix and uri (xmlns attributes of Envelope)
+        for k, v in request[:]:
+            if v in ("http://schemas.xmlsoap.org/soap/envelope/",
+                     "http://www.w3.org/2003/05/soap-env",
+                     "http://www.w3.org/2003/05/soap-envelope",):
+                soap_ns = request.attributes()[k].localName
+                soap_uri = request.attributes()[k].value
 
-                # If the value from attributes on Envelope is in additional namespaces
-                elif v in self.namespaces.values():
-                    _ns = request.attributes()[k].localName
-                    _uri = request.attributes()[k].value
-                    _ns_reversed[_uri] = _ns  # update with received alias
-                    # Now we change 'external' and 'model' to the received forms i.e. 'ext' and 'mod'
-                # After that we know how the client has prefixed additional namespaces
+            # If the value from attributes on Envelope is in additional namespaces
+            elif v in self.namespaces.values():
+                _ns = request.attributes()[k].localName
+                _uri = request.attributes()[k].value
+                _ns_reversed[_uri] = _ns  # update with received alias
+                # Now we change 'external' and 'model' to the received forms i.e. 'ext' and 'mod'
+            # After that we know how the client has prefixed additional namespaces
 
-            ns = NS_RX.findall(xml)
-            for k, v in ns:
-                if v in self.namespaces.values():
-                    _ns_reversed[v] = k
-
-            soap_fault_code = 'Client'
-
-            # parse request message and get local method
-            method = request('Body', ns=soap_uri).children()(0)
-            if action:
-                # method name = action
-                name = action[len(self.action)+1:-1]
-                prefix = self.prefix
-            if not action or not name:
-                # method name = input message name
-                name = method.get_local_name()
-                prefix = self.prefix or method.get_prefix()
-
-            log.debug('dispatch method: %s', name)
-            function, returns_types, args_types, doc = self.methods[name]
-            log.debug('returns_types %s', returns_types)
-
-            # de-serialize parameters (if type definitions given)
-            if args_types:
-                args = method.children().unmarshall(args_types)
-            elif args_types is None:
-                args = {'request': method}  # send raw request
-            else:
-                args = {}  # no parameters
-
-            soap_fault_code = 'Server'
-            # execute function
-            ret = function(**args)
-            log.debug('dispathed method returns: %s', ret)
-
-        except SoapFault as e:
-            fault.update({
-                'faultcode': "%s.%s" % (soap_fault_code, e.faultcode),
-                'faultstring': e.faultstring,
-                'detail': e.detail
-            })
-
-        except Exception:  # This shouldn't be one huge try/except
-            import sys
-            etype, evalue, etb = sys.exc_info()
-            log.error(traceback.format_exc())
-            if self.debug:
-                detail = u''.join(traceback.format_exception(etype, evalue, etb))
-                detail += u'\n\nXML REQUEST\n\n' + xml.decode('UTF-8')
-            else:
-                detail = None
-            fault.update({'faultcode': "%s.%s" % (soap_fault_code, etype.__name__),
-                     'faultstring': evalue,
-                     'detail': detail})
+        ns = NS_RX.findall(xml)
+        for k, v in ns:
+            if v in self.namespaces.values():
+                _ns_reversed[v] = k
 
         # build response message
         if not prefix:
@@ -250,6 +197,34 @@ class SoapDispatcher(object):
             # generate a Soap Fault (with the python exception)
             body.marshall("%s:Fault" % soap_ns, fault, ns=False)
         else:
+            # parse request message and get local method
+            method = request('Body', ns=soap_uri).children()(0)
+            if action:
+                # method name = action
+                name = action[len(self.action)+1:-1]
+                prefix = self.prefix
+            if not action or not name:
+                # method name = input message name
+                name = method.get_local_name()
+                prefix = self.prefix or method.get_prefix()
+
+            #log.debug('dispatch method: %s', name)
+            function, returns_types, args_types, doc = self.methods[name]
+            #log.debug('returns_types %s', returns_types)
+
+            # de-serialize parameters (if type definitions given)
+            if args_types:
+                args = method.children().unmarshall(args_types)
+            elif args_types is None:
+                args = {'request': method}  # send raw request
+            else:
+                args = {}  # no parameters
+
+            # execute function
+            ret = function(**args)
+            #log.debug('dispathed method returns: %s', ret)
+
+
             # return normal value
             res = body.add_child(self.response_element_name(name))
             if not prefix:
@@ -276,7 +251,8 @@ class SoapDispatcher(object):
                 # merge xmlelement returned
                 res.import_node(ret)
             elif returns_types == {}:
-                log.warning('Given returns_types is an empty dict.')
+                #log.warning('Given returns_types is an empty dict.')
+                pass
 
 
         return response.as_xml(pretty=self.pretty)
@@ -480,7 +456,7 @@ class SOAPHandler(BaseHTTPRequestHandler):
             headers={'content-type': self.headers.get('content-type')})
         # check if fault dict was completed (faultcode, faultstring, detail)
         if fault:
-            log.error(fault)
+            #log.error(fault)
             self.send_response(500)
         else:
             self.send_response(200)
@@ -580,13 +556,13 @@ if __name__ == "__main__":
             request, response, doc = dispatcher.help(method)
 
     if '--serve' in sys.argv:
-        log.info("Starting server...")
+        #log.info("Starting server...")
         httpd = HTTPServer(("", 8008), SOAPHandler)
         httpd.dispatcher = dispatcher
         httpd.serve_forever()
 
     if '--wsgi-serve' in sys.argv:
-        log.info("Starting wsgi server...")
+        #log.info("Starting wsgi server...")
         from wsgiref.simple_server import make_server
         application = WSGISOAPHandler(dispatcher)
         wsgid = make_server('', 8008, application)
@@ -606,8 +582,8 @@ if __name__ == "__main__":
         c = [{'d': '1.20'}, {'d': '2.01'}]
         response = client.Adder(p=p, dt='2010-07-24', c=c)
         result = response.AddResult
-        log.info(int(result.ab))
-        log.info(str(result.dd))
+        #log.info(int(result.ab))
+        #log.info(str(result.dd))
 
     if '--consume-wsdl' in sys.argv:
         from .client import SoapClient
@@ -619,6 +595,6 @@ if __name__ == "__main__":
         dt = datetime.date.today()
         response = client.Adder(p=p, dt=dt, c=c)
         result = response['AddResult']
-        log.info(int(result['ab']))
-        log.info(str(result['dd']))
+        #log.info(int(result['ab']))
+        #log.info(str(result['dd']))
 
